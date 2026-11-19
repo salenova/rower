@@ -67,6 +67,7 @@
   <h1>🚣 초보 로잉 인터벌</h1>
   <div class="status" id="status">로잉머신 연결 안 됨</div>
   <button id="btnConnect">로잉머신 연결</button>
+  <button id="btnConnectAll" class="ghost hidden" style="margin-top:8px">전체 기기 목록에서 찾기 (RRM01 선택)</button>
 
   <h2>프로그램 선택</h2>
   <div class="prog" id="progList"></div>
@@ -275,7 +276,9 @@ function lastText(id) {
 /* =========================================================
    3. 블루투스 (FTMS 표준)
    ========================================================= */
-const FTMS = 0x1826, ROWER_DATA = 0x2ad1, CONTROL_PT = 0x2ad9, RES_RANGE = 0x2ad6;
+// 표준 번호를 전체 문자열 형식으로 (일부 브라우저는 짧은 숫자를 못 알아들음)
+const U = n => `0000${n.toString(16).padStart(4, '0')}-0000-1000-8000-00805f9b34fb`;
+const FTMS = U(0x1826), ROWER_DATA = U(0x2ad1), CONTROL_PT = U(0x2ad9), RES_RANGE = U(0x2ad6);
 let device, controlChar, range = null, queue = Promise.resolve(), lastLevelCmd = null;
 const live = {};   // 기기에서 받은 최신 값
 
@@ -287,7 +290,12 @@ const setStatus = s => { $('status').textContent = s; log(s); };
 function errText(e) {
   if (e == null) return '알 수 없는 오류';
   if (typeof e === 'string') return e;
-  return [e.name, e.message, e.code].filter(x => x != null && x !== '').join(' / ') || String(e);
+  const parts = [e.name, e.message, e.code].filter(x => x != null && x !== '');
+  try {
+    const keys = Object.getOwnPropertyNames(e).filter(k => !['stack', 'message', 'name', 'code'].includes(k));
+    if (keys.length) parts.push(JSON.stringify(e, keys));
+  } catch (x) {}
+  return parts.join(' / ') || String(e);
 }
 // 단계별로 실행하고, 실패하면 "몇 번째 단계"에서 실패했는지 알려줌
 async function step(label, fn, optional = false) {
@@ -296,18 +304,17 @@ async function step(label, fn, optional = false) {
   catch (e) {
     log(`  ✖ ${label}: ${errText(e)}`);
     if (optional) return null;
-    const err = new Error(`[${label}] ${errText(e)}`); throw err;
+    throw { name:'', message:`[${label}] ${errText(e)}` };
   }
 }
 const wait = ms => new Promise(r => setTimeout(r, ms));
 
-$('btnConnect').onclick = async () => {
+async function connect(all) {
   if (!navigator.bluetooth) { alert('이 브라우저는 블루투스를 지원하지 않아요. 아이폰에서는 Bluefy 앱으로 열어 주세요.'); return; }
   try {
-    device = await step('1. 기기 선택', () => navigator.bluetooth.requestDevice({
-      filters:[{ services:[FTMS] }, { namePrefix:'RRM' }],
-      optionalServices:[FTMS]
-    }));
+    device = await step(all ? '1. 기기 선택 (전체 기기)' : '1. 기기 선택', () => navigator.bluetooth.requestDevice(
+      all ? { acceptAllDevices:true, optionalServices:[FTMS] }
+          : { filters:[{ services:[FTMS] }], optionalServices:[FTMS] }));
     device.addEventListener('gattserverdisconnected', () => setStatus('⚠️ 연결이 끊어졌어요. 다시 연결해 주세요.'));
     setStatus(`연결 중... (${device.name || '기기'})`);
 
@@ -342,11 +349,15 @@ $('btnConnect').onclick = async () => {
     if (!controlChar) setStatus(`⚠️ ${device.name || '로잉머신'} 연결됨 (기록만, 강도 조절 불가)`);
     else setStatus(`✅ ${device.name || '로잉머신'} 연결됨`);
     $('btnConnect').textContent = '다시 연결';
+    $('btnConnectAll').classList.add('hidden');
   } catch (e) {
     setStatus('연결 실패: ' + errText(e));
-    document.querySelector('details').open = true; // 통신 기록 자동으로 펼치기
+    $('btnConnectAll').classList.remove('hidden');  // 다른 방식으로 찾기 버튼 보이기
+    document.querySelector('details').open = true;  // 통신 기록 자동으로 펼치기
   }
-};
+}
+$('btnConnect').onclick = () => connect(false);
+$('btnConnectAll').onclick = () => connect(true);
 
 function sendCmd(bytes, label) {
   queue = queue.then(async () => {

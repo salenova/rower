@@ -139,13 +139,13 @@
 
   <div class="row3">
     <div class="card"><div class="label">목표 강도</div><div class="val big" id="tLevel">-</div></div>
-    <div class="card"><div class="label">목표 스트로크/분</div><div class="val big" id="tSpm">-</div></div>
+    <div class="card"><div class="label">목표 페이스/500m</div><div class="val" id="tPace" style="font-size:24px">-</div></div>
     <div class="card"><div class="label">라운드</div><div class="val big" id="round">-</div></div>
   </div>
 
   <div class="row3">
     <div class="card"><div class="label">지금 스트로크/분</div><div class="val" id="spm">-</div></div>
-    <div class="card"><div class="label">페이스/500m</div><div class="val" id="pace">-</div></div>
+    <div class="card"><div class="label">지금 페이스/500m</div><div class="val" id="pace">-</div><div class="label" id="paceHint"></div></div>
     <div class="card"><div class="label">파워(W)</div><div class="val" id="power">-</div></div>
   </div>
   <div class="row3">
@@ -191,7 +191,21 @@ const PROGRAMS = [
   { id:25, name:'25분 · 중간',  wu:300, rounds:8,  work:60, rest:45, cd:360, workLv:7, restLv:3 },
   { id:30, name:'30분 · 도전',  wu:300, rounds:10, work:60, rest:45, cd:450, workLv:8, restLv:3 },
 ];
-const SPM = { warm:'18~20', work:'24~26', rest:'16~18', cool:'18~20' };
+/* 목표 페이스 = 500m 가는 데 걸리는 시간(초). 숫자가 작을수록 빠름.
+   기준(base) = 운동 구간 목표의 '느린 쪽' 끝.
+   - 지난번 기록이 있으면: 지난번 운동 구간 평균 페이스 → "지난번만큼 또는 조금 더 빠르게"
+   - 없으면: 2:50 (40대 초보 기준 대략값, 기기마다 페이스 계산이 달라 참고용) */
+const BASE_PACE = 170;
+const PACE_OFS = { work:[-5, 0], warm:[25, 45], cool:[25, 45], rest:[40, 70] };  // base에 더하는 초 [빠른 쪽, 느린 쪽]
+function basePace(p) {
+  const last = loadLast(p.id);
+  const r = last && last.rounds ? last.rounds.filter(m => m > 0) : [];
+  if (!r.length) return { sec:BASE_PACE, fromLast:false };
+  const avg = r.reduce((a, b) => a + b, 0) / r.length;          // 운동 1회(p.work초) 평균 거리
+  const sec = Math.round(500 * p.work / avg);                   // → 500m 환산 시간
+  return { sec:Math.max(100, Math.min(300, sec)), fromLast:true };
+}
+function paceRange(kind) { const o = PACE_OFS[kind]; return [run.base.sec + o[0], run.base.sec + o[1]]; }
 const KIND = { warm:'워밍업', work:'운동 🔥', rest:'휴식', cool:'쿨다운' };
 const COLOR = { warm:'var(--warm)', work:'var(--work)', rest:'var(--rest)', cool:'var(--cool)' };
 
@@ -439,13 +453,16 @@ $('btnStart').onclick = () => {
   let t = 0; segs.forEach(s => { s.start = t; t += s.sec; });
   const age = parseInt($('age').value, 10), max = 220 - age;
   run = { prog:selProg, segs, total:t, idx:-1, elapsed:0, startedAt:performance.now(), paused:false,
-          adjust:0, lastBeepSec:-1, rounds:[], dist0:live.dist, strokes0:live.strokes,
+          adjust:0, lastBeepSec:-1, base:basePace(selProg), rounds:[], dist0:live.dist, strokes0:live.strokes,
           trace:[], ghost:pickGhost(selProg.id),
           hr:{ easy:`${Math.round(max * .5)}~${Math.round(max * .6)}`, work:`${Math.round(max * .7)}~${Math.round(max * .8)}` } };
   lastLeadSign = 0;
   $('raceCard').classList.toggle('hidden', !run.ghost);
   if (run.ghost) $('raceTitle').textContent = `vs ${$('ghostSel').value === 'best' ? '최고 기록' : '지난번'}의 나 (${run.ghost.date})`;
   show('work'); timer = setInterval(tick, 250); tick();
+  $('roundMsg').textContent = run.base.fromLast
+    ? `목표 페이스: 지난번 운동 구간 평균(${mmss(run.base.sec)}/500m) 기준`
+    : '목표 페이스는 대략값이에요. 한 번 끝까지 하면 내 기록에 맞춰 바뀌어요.';
 };
 
 // 오늘 운동 시작 후 내가 간 거리
@@ -499,6 +516,7 @@ function tick() {
   $('progress').style.width = (e / run.total * 100) + '%';
   $('spm').textContent = live.spm ?? '-';
   $('pace').textContent = live.pace ? mmss(live.pace) : '-';
+  showPaceHint(run.segs[idx].kind);
   $('power').textContent = live.power ?? '-';
   $('dist').textContent = myDist() ?? '-';
 
@@ -526,13 +544,28 @@ function enterSeg(idx) {
   $('phase').textContent = KIND[s.kind];
   $('phase').style.background = COLOR[s.kind];
   $('tLevel').textContent = lv;
-  $('tSpm').textContent = SPM[s.kind];
+  const [lo, hi] = paceRange(s.kind);
+  $('tPace').textContent = `${mmss(lo)}~${mmss(hi)}`;
   $('round').textContent = s.round ? `${s.round}/${run.prog.rounds}` : '-';
   $('hrZone').textContent = (s.kind === 'work' ? run.hr.work : run.hr.easy) + ' bpm';
   $('next').textContent = n ? `다음: ${KIND[n.kind]} · 강도 ${Math.max(1, Math.min(16, n.lv + run.adjust))}` : '다음: 끝!';
   if (s.kind === 'work') $('roundMsg').textContent = '힘차게! 다리로 밀고 → 몸 젖히고 → 팔 당기기';
   beep(s.kind === 'work' ? 1000 : 600, 300);
   if (controlChar) setLevel(lv);
+}
+
+// 지금 페이스가 목표 범위 안인지 색과 짧은 말로 알려주기 (페이스 숫자가 작을수록 빠름)
+function showPaceHint(kind) {
+  const el = $('pace'), hint = $('paceHint');
+  if (!live.pace || live.pace >= 600 || run.paused) { el.style.color = ''; hint.textContent = ''; return; }
+  const [lo, hi] = paceRange(kind);
+  let color = 'var(--rest)', msg = '목표 안 👍';
+  if (kind === 'work') {
+    if (live.pace > hi) { color = 'var(--work)'; msg = '조금 더 힘차게'; }
+    else if (live.pace < lo) msg = '목표보다 빠름 👍';
+  } else if (live.pace < lo) { color = 'var(--warm)'; msg = '천천히, 편하게'; }
+  else if (live.pace > hi) { color = ''; msg = '편하게 OK'; }
+  el.style.color = color; hint.textContent = msg;
 }
 
 $('btnEasier').onclick = () => { run.adjust--; reapply(); };

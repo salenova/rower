@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>초보 로잉 인터벌</title>
+<style>
+  :root { --bg:#0f1720; --card:#1b2632; --fg:#e8eef4; --dim:#8a9bab; --accent:#2fb3c9;
+          --work:#e8603d; --rest:#3dae6e; --warm:#e8a33d; --cool:#5b8def; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; padding:16px; padding-top:max(16px, env(safe-area-inset-top));
+         padding-bottom:max(16px, env(safe-area-inset-bottom));
+         background:var(--bg); color:var(--fg); font-family:-apple-system,system-ui,sans-serif; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  h2 { font-size:16px; margin:20px 0 8px; color:var(--dim); font-weight:600; }
+  button { font:inherit; border:0; border-radius:12px; padding:14px; background:var(--accent);
+           color:#062028; font-weight:700; width:100%; }
+  button.ghost { background:var(--card); color:var(--fg); }
+  button:disabled { opacity:.4; }
+  .status { color:var(--dim); font-size:14px; margin:8px 0; }
+  .card { background:var(--card); border-radius:14px; padding:14px; }
+  .prog { display:grid; gap:10px; }
+  .prog .card { border:2px solid transparent; cursor:pointer; }
+  .prog .card.sel { border-color:var(--accent); }
+  .prog b { font-size:18px; }
+  .prog .sub { color:var(--dim); font-size:13px; margin-top:4px; line-height:1.5; }
+  .seg3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; }
+  .seg3 button { padding:12px 4px; background:var(--card); color:var(--fg); font-weight:600; }
+  .seg3 button.sel { background:var(--accent); color:#062028; }
+  .note { color:var(--dim); font-size:12px; line-height:1.6; margin-top:12px; }
+  .hidden { display:none !important; }
+  /* 운동 화면 */
+  #phase { font-size:28px; font-weight:800; text-align:center; padding:10px; border-radius:14px; }
+  #clock { font-size:84px; font-weight:800; text-align:center; font-variant-numeric:tabular-nums; line-height:1.1; margin-top:8px; }
+  #next { text-align:center; color:var(--dim); font-size:15px; }
+  .bar { height:8px; background:#2a3846; border-radius:4px; overflow:hidden; margin:12px 0; }
+  .bar > div { height:100%; background:var(--accent); width:0; }
+  .row2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:10px; }
+  .row3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-top:10px; }
+  .label { color:var(--dim); font-size:12px; }
+  .val { font-size:26px; font-weight:700; margin-top:2px; font-variant-numeric:tabular-nums; }
+  .big { font-size:34px; }
+  #roundMsg { text-align:center; font-size:15px; margin-top:10px; min-height:20px; }
+  .ctrl { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:12px; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  td, th { padding:6px 4px; border-bottom:1px solid #2a3846; text-align:right; }
+  td:first-child, th:first-child { text-align:left; }
+  select { font:inherit; width:100%; padding:10px; border-radius:10px; background:var(--bg);
+           color:var(--fg); border:1px solid #33475a; margin-top:6px; }
+  details { margin-top:16px; }
+  summary { color:var(--dim); font-size:14px; }
+  .lane { display:flex; align-items:center; gap:8px; margin-top:8px; }
+  .lname { width:32px; font-size:12px; color:var(--dim); }
+  .track { flex:1; height:26px; background:#13202b; border-radius:13px; position:relative;
+           background-image:repeating-linear-gradient(90deg,transparent 0 9.5%,#2a3846 9.5% 10%); }
+  .boat { position:absolute; top:0; font-size:20px; line-height:26px; transform:translateX(-50%);
+          transition:left .25s linear; left:0; }
+  .boat.ghost { opacity:.6; }
+  #log { background:#0a1016; color:#9fb3c5; font:11px ui-monospace,monospace; padding:10px;
+         border-radius:10px; height:160px; overflow:auto; white-space:pre-wrap; margin-top:8px; }
+</style>
+</head>
+<body>
+
+<!-- ================= 1. 시작 화면 ================= -->
+<section id="home">
+  <h1>🚣 초보 로잉 인터벌</h1>
+  <div class="status" id="status">로잉머신 연결 안 됨</div>
+  <button id="btnConnect">로잉머신 연결</button>
+
+  <h2>프로그램 선택</h2>
+  <div class="prog" id="progList"></div>
+
+  <h2>오늘 컨디션</h2>
+  <div class="seg3" id="feel">
+    <button data-v="-2">가볍게</button>
+    <button data-v="0" class="sel">보통</button>
+    <button data-v="2">조금 세게</button>
+  </div>
+
+  <h2>레이스 상대 (과거의 나)</h2>
+  <select id="ghostSel">
+    <option value="last">지난번의 나</option>
+    <option value="best">최고 기록의 나</option>
+    <option value="off">레이스 끄기</option>
+  </select>
+  <div class="note" id="ghostInfo" style="margin-top:6px"></div>
+
+  <h2>나이 (심박 참고용)</h2>
+  <select id="age"></select>
+
+  <div style="margin-top:20px"><button id="btnStart">운동 시작</button></div>
+
+  <div class="note">
+    ⚠️ 가슴 통증, 어지러움, 말을 못 할 만큼 숨이 차면 바로 멈추세요.<br>
+    평소 운동을 안 했다면 처음 2주는 15분·20분을 "가볍게"로 시작하는 것을 권합니다.
+  </div>
+
+  <details>
+    <summary>기기 설정 · 통신 기록 (강도가 안 바뀔 때)</summary>
+    <div class="card" style="margin-top:8px">
+      <div class="label">강도 숫자 변환</div>
+      <select id="scale">
+        <option value="auto">자동 (기기가 알려준 범위로 판단)</option>
+        <option value="x1">그대로 보내기 (1~16)</option>
+        <option value="x10">10배로 보내기 (10~160)</option>
+      </select>
+      <div class="label" style="margin-top:10px">명령 전송 방식</div>
+      <select id="mode">
+        <option value="u8">A: 표준 방식 (1바이트)</option>
+        <option value="s16">B: 2바이트 방식</option>
+      </select>
+      <div style="margin-top:10px" class="seg3">
+        <button class="ghost" data-test="2">강도 2 테스트</button>
+        <button class="ghost" data-test="8">강도 8 테스트</button>
+        <button class="ghost" data-test="14">강도 14 테스트</button>
+      </div>
+      <div id="log"></div>
+    </div>
+  </details>
+</section>
+
+<!-- ================= 2. 운동 화면 ================= -->
+<section id="work" class="hidden">
+  <div id="phase">워밍업</div>
+  <div id="clock">0:00</div>
+  <div id="next">다음: -</div>
+  <div class="bar"><div id="progress"></div></div>
+
+  <div class="card hidden" id="raceCard" style="margin-top:4px">
+    <div style="display:flex;justify-content:space-between;align-items:baseline">
+      <div class="label" id="raceTitle">vs 지난번의 나</div>
+      <div id="raceGap" style="font-size:24px;font-weight:800">-</div>
+    </div>
+    <div class="lane"><span class="lname">나</span><div class="track"><div class="boat me" id="boatMe">🚣</div></div></div>
+    <div class="lane"><span class="lname">과거</span><div class="track"><div class="boat ghost" id="boatGhost">👻</div></div></div>
+  </div>
+
+  <div class="row3">
+    <div class="card"><div class="label">목표 강도</div><div class="val big" id="tLevel">-</div></div>
+    <div class="card"><div class="label">목표 스트로크/분</div><div class="val big" id="tSpm">-</div></div>
+    <div class="card"><div class="label">라운드</div><div class="val big" id="round">-</div></div>
+  </div>
+
+  <div class="row3">
+    <div class="card"><div class="label">지금 스트로크/분</div><div class="val" id="spm">-</div></div>
+    <div class="card"><div class="label">페이스/500m</div><div class="val" id="pace">-</div></div>
+    <div class="card"><div class="label">파워(W)</div><div class="val" id="power">-</div></div>
+  </div>
+  <div class="row3">
+    <div class="card"><div class="label">오늘 거리(m)</div><div class="val" id="dist">-</div></div>
+    <div class="card"><div class="label">남은 시간</div><div class="val" id="remain">-</div></div>
+    <div class="card"><div class="label">심박 참고</div><div class="val" id="hrZone" style="font-size:18px">-</div></div>
+  </div>
+
+  <div id="roundMsg"></div>
+
+  <div class="ctrl">
+    <button class="ghost" id="btnEasier">강도 −1</button>
+    <button class="ghost" id="btnHarder">강도 +1</button>
+    <button class="ghost" id="btnPause">일시정지</button>
+    <button class="ghost" id="btnStop">그만하기</button>
+  </div>
+</section>
+
+<!-- ================= 3. 결과 화면 ================= -->
+<section id="done" class="hidden">
+  <h1>🎉 수고하셨어요!</h1>
+  <div class="row3">
+    <div class="card"><div class="label">운동 시간</div><div class="val" id="sTime">-</div></div>
+    <div class="card"><div class="label">총 거리(m)</div><div class="val" id="sDist">-</div></div>
+    <div class="card"><div class="label">스트로크</div><div class="val" id="sStrokes">-</div></div>
+  </div>
+  <h2>운동 구간별 거리 (1회 = 운동 구간 1번)</h2>
+  <div class="card"><table id="sTable"></table></div>
+  <div class="note" id="sNote"></div>
+  <div style="margin-top:16px"><button id="btnHome">처음으로</button></div>
+</section>
+
+<script>
+/* =========================================================
+   1. 운동 프로그램 정의
+   - 구조: 워밍업 → (운동 + 휴식) × N회 → 쿨다운
+   - 참고 글의 "1분 운동 + 45초 휴식 × 10회" 구조를 초보자용으로 낮춤
+   - 강도는 멜킨 1~16단계 기준
+   ========================================================= */
+const PROGRAMS = [
+  { id:15, name:'15분 · 입문',  wu:180, rounds:5,  work:60, rest:60, cd:120, workLv:5, restLv:2 },
+  { id:20, name:'20분 · 기초',  wu:240, rounds:6,  work:60, rest:60, cd:240, workLv:6, restLv:3 },
+  { id:25, name:'25분 · 중간',  wu:300, rounds:8,  work:60, rest:45, cd:360, workLv:7, restLv:3 },
+  { id:30, name:'30분 · 도전',  wu:300, rounds:10, work:60, rest:45, cd:450, workLv:8, restLv:3 },
+];
+const SPM = { warm:'18~20', work:'24~26', rest:'16~18', cool:'18~20' };
+const KIND = { warm:'워밍업', work:'운동 🔥', rest:'휴식', cool:'쿨다운' };
+const COLOR = { warm:'var(--warm)', work:'var(--work)', rest:'var(--rest)', cool:'var(--cool)' };
+
+// 프로그램 → 구간 목록 만들기
+function buildSegments(p, feel) {
+  const clamp = v => Math.max(1, Math.min(16, v));
+  const segs = [];
+  // 워밍업: 3단계로 나눠 강도를 천천히 올림
+  const w = Math.round(p.wu / 3);
+  [p.restLv - 1, p.restLv, p.restLv + 1].forEach((lv, i) =>
+    segs.push({ kind:'warm', sec: i < 2 ? w : p.wu - 2 * w, lv: clamp(lv + Math.round(feel / 2)) }));
+  for (let r = 1; r <= p.rounds; r++) {
+    segs.push({ kind:'work', sec:p.work, lv:clamp(p.workLv + feel), round:r });
+    segs.push({ kind:'rest', sec:p.rest, lv:clamp(p.restLv - 1 + Math.round(feel / 2)), round:r });
+  }
+  // 쿨다운: 2단계로 강도를 내림
+  const c = Math.round(p.cd / 2);
+  segs.push({ kind:'cool', sec:c,        lv:clamp(p.restLv + Math.round(feel / 2)) });
+  segs.push({ kind:'cool', sec:p.cd - c, lv:clamp(p.restLv - 1) });
+  return segs;
+}
+
+/* =========================================================
+   2. 화면 준비
+   ========================================================= */
+const $ = id => document.getElementById(id);
+let selProg = PROGRAMS[0], feel = 0;
+
+PROGRAMS.forEach((p, i) => {
+  const d = document.createElement('div');
+  d.className = 'card' + (i === 0 ? ' sel' : '');
+  const restTxt = p.rest === 60 ? '1분' : p.rest + '초';
+  d.innerHTML = `<b>${p.name}</b><div class="sub">
+    워밍업 ${p.wu / 60}분 → <b>1분 운동 + ${restTxt} 휴식 × ${p.rounds}회</b> → 쿨다운 ${Math.round(p.cd / 60 * 10) / 10}분<br>
+    운동 강도 ${p.workLv}단계 · 휴식 강도 ${p.restLv - 1}단계 ${lastText(p.id)}</div>`;
+  d.onclick = () => {
+    document.querySelectorAll('#progList .card').forEach(x => x.classList.remove('sel'));
+    d.classList.add('sel'); selProg = p; updateGhostInfo();
+  };
+  $('progList').appendChild(d);
+});
+
+document.querySelectorAll('#feel button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#feel button').forEach(x => x.classList.remove('sel'));
+  b.classList.add('sel'); feel = parseInt(b.dataset.v, 10);
+});
+
+$('ghostSel').onchange = updateGhostInfo;
+updateGhostInfo();
+
+for (let a = 30; a <= 70; a++) {
+  const o = document.createElement('option'); o.value = a; o.textContent = a + '세';
+  if (a === 45) o.selected = true;
+  $('age').appendChild(o);
+}
+
+// 지난 기록 (이 폰 브라우저에만 저장됨)
+function loadRec(kind, id) { try { return JSON.parse(localStorage.getItem(`row${kind}_${id}`)); } catch (e) { return null; } }
+function saveRec(kind, id, v) { try { localStorage.setItem(`row${kind}_${id}`, JSON.stringify(v)); } catch (e) {} }
+function loadLast(id) { return loadRec('Last', id); }
+
+// 레이스 상대(유령 보트) 고르기
+function pickGhost(id) {
+  const sel = $('ghostSel').value;
+  if (sel === 'off') return null;
+  const r = loadRec(sel === 'best' ? 'Best' : 'Last', id);
+  return r && r.trace && r.trace.length > 1 ? r : null;
+}
+function updateGhostInfo() {
+  const sel = $('ghostSel').value;
+  if (sel === 'off') { $('ghostInfo').textContent = '레이스 없이 운동합니다.'; return; }
+  const g = pickGhost(selProg.id);
+  $('ghostInfo').textContent = g
+    ? `${selProg.name}: ${g.date} 기록(${g.dist}m)과 실시간으로 겨룹니다.`
+    : `${selProg.name}은 아직 기록이 없어요. 이번 운동을 끝까지 하면 다음부터 레이스할 수 있어요.`;
+}
+function lastText(id) {
+  const l = loadLast(id);
+  return l ? `<br>지난번: ${l.date} · ${l.dist}m` : '';
+}
+
+/* =========================================================
+   3. 블루투스 (FTMS 표준)
+   ========================================================= */
+const FTMS = 0x1826, ROWER_DATA = 0x2ad1, CONTROL_PT = 0x2ad9, RES_RANGE = 0x2ad6;
+let device, controlChar, range = null, queue = Promise.resolve(), lastLevelCmd = null;
+const live = {};   // 기기에서 받은 최신 값
+
+const log = m => { $('log').textContent += `[${new Date().toLocaleTimeString()}] ${m}\n`; $('log').scrollTop = 1e9; };
+const hex = dv => [...new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength)].map(b => b.toString(16).padStart(2, '0')).join(' ');
+const setStatus = s => { $('status').textContent = s; log(s); };
+
+$('btnConnect').onclick = async () => {
+  if (!navigator.bluetooth) { alert('이 브라우저는 블루투스를 지원하지 않아요. 아이폰에서는 Bluefy 앱으로 열어 주세요.'); return; }
+  try {
+    device = await navigator.bluetooth.requestDevice({ filters:[{ services:[FTMS] }], optionalServices:[FTMS] });
+    device.addEventListener('gattserverdisconnected', () => setStatus('⚠️ 연결이 끊어졌어요. 다시 연결해 주세요.'));
+    setStatus('연결 중...');
+    const svc = await (await device.gatt.connect()).getPrimaryService(FTMS);
+
+    const rower = await svc.getCharacteristic(ROWER_DATA);
+    rower.addEventListener('characteristicvaluechanged', e => parseRower(e.target.value));
+    await rower.startNotifications();
+
+    try {
+      const v = await (await svc.getCharacteristic(RES_RANGE)).readValue();
+      range = { min:v.getInt16(0, true), max:v.getInt16(2, true) };
+      log(`기기 강도 범위(원시값): ${range.min}~${range.max} [${hex(v)}]`);
+    } catch (e) { log('강도 범위를 못 읽음'); }
+
+    controlChar = await svc.getCharacteristic(CONTROL_PT);
+    controlChar.addEventListener('characteristicvaluechanged', e => onReply(e.target.value));
+    await controlChar.startNotifications();
+    await sendCmd([0x00], '제어권 요청');
+    setStatus(`✅ ${device.name || '로잉머신'} 연결됨`);
+    $('btnConnect').textContent = '다시 연결';
+  } catch (e) { setStatus('연결 실패: ' + e.message); }
+};
+
+function sendCmd(bytes, label) {
+  queue = queue.then(async () => {
+    if (!controlChar) return;
+    log(`→ ${label} [${bytes.map(b => b.toString(16).padStart(2, '0')).join(' ')}]`);
+    try { await controlChar.writeValueWithResponse(new Uint8Array(bytes)); }
+    catch (e) { log('전송 오류: ' + e.message); }
+  });
+  return queue;
+}
+
+const RESULT = { 1:'성공', 2:'지원 안 함', 3:'잘못된 값', 4:'실패', 5:'제어권 없음' };
+function onReply(v) {
+  if (v.getUint8(0) !== 0x80) { log('← ' + hex(v)); return; }
+  const op = v.getUint8(1), res = v.getUint8(2);
+  log(`← 응답(op ${op}): ${RESULT[res] || res}`);
+  // 제어권을 잃었으면 다시 요청하고 마지막 강도 재전송
+  if (res === 5 && op !== 0x00) { sendCmd([0x00], '제어권 재요청'); if (lastLevelCmd) setLevel(lastLevelCmd); }
+}
+
+// 1~16 단계를 기기가 원하는 숫자로 바꿔 전송
+function setLevel(level) {
+  lastLevelCmd = level;
+  const s = $('scale').value;
+  const x10 = s === 'x10' || (s === 'auto' && range && range.max >= 40);
+  let raw = x10 ? level * 10 : level;
+  if (range) raw = Math.max(range.min, Math.min(range.max, raw));
+  const bytes = $('mode').value === 's16' ? [0x04, raw & 0xff, (raw >> 8) & 0xff] : [0x04, raw & 0xff];
+  return sendCmd(bytes, `강도 ${level}단계`);
+}
+document.querySelectorAll('[data-test]').forEach(b => b.onclick = () => setLevel(parseInt(b.dataset.test, 10)));
+
+function parseRower(dv) {
+  try {
+    const f = dv.getUint16(0, true); let i = 2;
+    if (!(f & 0x0001)) { live.spm = dv.getUint8(i) / 2; live.strokes = dv.getUint16(i + 1, true); i += 3; }
+    if (f & 0x0002) i += 1;
+    if (f & 0x0004) { live.dist = dv.getUint16(i, true) | (dv.getUint8(i + 2) << 16); i += 3; }
+    if (f & 0x0008) { live.pace = dv.getUint16(i, true); i += 2; }
+    if (f & 0x0010) i += 2;
+    if (f & 0x0020) { live.power = dv.getInt16(i, true); i += 2; }
+  } catch (e) { /* 짧은 패킷은 무시 */ }
+}
+
+/* =========================================================
+   4. 소리 · 화면 꺼짐 방지
+   ========================================================= */
+let audio, wakeLock;
+function beep(freq = 880, ms = 150) {
+  try {
+    if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
+    const o = audio.createOscillator(), g = audio.createGain();
+    o.frequency.value = freq; o.connect(g); g.connect(audio.destination);
+    g.gain.setValueAtTime(0.3, audio.currentTime);
+    o.start(); o.stop(audio.currentTime + ms / 1000);
+  } catch (e) {}
+}
+async function keepAwake() { try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {} }
+
+/* =========================================================
+   5. 운동 진행 (타이머)
+   ========================================================= */
+let run = null, timer = null;
+const mmss = s => { s = Math.max(0, Math.ceil(s)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+
+$('btnStart').onclick = () => {
+  if (!controlChar && !confirm('로잉머신이 연결되지 않았어요. 강도 자동 조절 없이 타이머만으로 시작할까요?')) return;
+  beep(660, 50); keepAwake();
+  const segs = buildSegments(selProg, feel);
+  let t = 0; segs.forEach(s => { s.start = t; t += s.sec; });
+  const age = parseInt($('age').value, 10), max = 220 - age;
+  run = { prog:selProg, segs, total:t, idx:-1, elapsed:0, startedAt:performance.now(), paused:false,
+          adjust:0, lastBeepSec:-1, rounds:[], dist0:live.dist, strokes0:live.strokes,
+          trace:[], ghost:pickGhost(selProg.id),
+          hr:{ easy:`${Math.round(max * .5)}~${Math.round(max * .6)}`, work:`${Math.round(max * .7)}~${Math.round(max * .8)}` } };
+  lastLeadSign = 0;
+  $('raceCard').classList.toggle('hidden', !run.ghost);
+  if (run.ghost) $('raceTitle').textContent = `vs ${$('ghostSel').value === 'best' ? '최고 기록' : '지난번'}의 나 (${run.ghost.date})`;
+  show('work'); timer = setInterval(tick, 250); tick();
+};
+
+// 오늘 운동 시작 후 내가 간 거리
+function myDist() { return (live.dist != null && run.dist0 != null) ? live.dist - run.dist0 : null; }
+
+// 과거 기록에서 같은 시간(t초)에 몇 m 갔었는지 (사이 값은 비례 계산)
+function ghostDist(t) {
+  const tr = run.ghost.trace;
+  if (t <= tr[0][0]) return tr[0][1];
+  for (let i = 1; i < tr.length; i++) {
+    if (t <= tr[i][0]) {
+      const [t0, d0] = tr[i - 1], [t1, d1] = tr[i];
+      return d0 + (d1 - d0) * (t - t0) / (t1 - t0);
+    }
+  }
+  return tr[tr.length - 1][1];
+}
+
+let lastLeadSign = 0;
+function updateRace(e) {
+  if (!run.ghost) return;
+  const me = myDist(), gh = ghostDist(e);
+  const full = Math.max(run.ghost.dist, me || 0, 1);   // 트랙 전체 길이 = 과거 총 거리
+  $('boatGhost').style.left = Math.min(100, gh / full * 100) + '%';
+  if (me == null) { $('raceGap').textContent = '기기 연결 필요'; return; }
+  $('boatMe').style.left = Math.min(100, me / full * 100) + '%';
+  const gap = Math.round(me - gh);
+  $('raceGap').textContent = gap > 0 ? `+${gap}m 앞섬` : gap < 0 ? `${gap}m 뒤짐` : '동점';
+  $('raceGap').style.color = gap >= 0 ? 'var(--rest)' : 'var(--work)';
+  // 역전하는 순간 알림 소리
+  const sign = Math.sign(gap);
+  if (sign !== 0 && lastLeadSign !== 0 && sign !== lastLeadSign) beep(sign > 0 ? 1320 : 440, 250);
+  if (sign !== 0) lastLeadSign = sign;
+}
+
+function curElapsed() { return run.paused ? run.elapsed : run.elapsed + (performance.now() - run.startedAt) / 1000; }
+
+function tick() {
+  const e = curElapsed();
+  if (e >= run.total) { finish(true); return; }
+  let idx = run.segs.findIndex(s => e >= s.start && e < s.start + s.sec);
+  if (idx !== run.idx) enterSeg(idx);
+  const s = run.segs[idx], left = s.start + s.sec - e;
+
+  // 구간 끝 3초 전부터 삐 소리
+  const sec = Math.ceil(left);
+  if (sec <= 3 && sec !== run.lastBeepSec) { run.lastBeepSec = sec; beep(sec === 1 ? 1100 : 700); }
+
+  $('clock').textContent = mmss(left);
+  $('remain').textContent = mmss(run.total - e);
+  $('progress').style.width = (e / run.total * 100) + '%';
+  $('spm').textContent = live.spm ?? '-';
+  $('pace').textContent = live.pace ? mmss(live.pace) : '-';
+  $('power').textContent = live.power ?? '-';
+  $('dist').textContent = myDist() ?? '-';
+
+  // 2초마다 "몇 초에 몇 m" 기록 → 다음번 레이스 상대가 됨
+  const t2 = Math.floor(e / 2) * 2;
+  if (myDist() != null && !run.paused && (!run.trace.length || run.trace[run.trace.length - 1][0] < t2))
+    run.trace.push([t2, myDist()]);
+  updateRace(e);
+}
+
+function enterSeg(idx) {
+  const prev = run.segs[run.idx];
+  // 운동 구간이 끝나면 그 1분 동안의 거리 기록
+  if (prev && prev.kind === 'work' && live.dist != null && prev.d0 != null) {
+    const m = live.dist - prev.d0;
+    run.rounds.push(m);
+    const last = loadLast(run.prog.id);
+    const before = last && last.rounds ? last.rounds[prev.round - 1] : null;
+    $('roundMsg').textContent = `${prev.round}회차 운동: ${m}m` + (before != null ? ` (지난번 ${before}m ${m >= before ? '👍' : ''})` : '');
+  }
+  run.idx = idx; run.lastBeepSec = -1;
+  const s = run.segs[idx], n = run.segs[idx + 1];
+  if (s.d0 == null) s.d0 = live.dist;
+  const lv = Math.max(1, Math.min(16, s.lv + run.adjust));
+  $('phase').textContent = KIND[s.kind];
+  $('phase').style.background = COLOR[s.kind];
+  $('tLevel').textContent = lv;
+  $('tSpm').textContent = SPM[s.kind];
+  $('round').textContent = s.round ? `${s.round}/${run.prog.rounds}` : '-';
+  $('hrZone').textContent = (s.kind === 'work' ? run.hr.work : run.hr.easy) + ' bpm';
+  $('next').textContent = n ? `다음: ${KIND[n.kind]} · 강도 ${Math.max(1, Math.min(16, n.lv + run.adjust))}` : '다음: 끝!';
+  if (s.kind === 'work') $('roundMsg').textContent = '힘차게! 다리로 밀고 → 몸 젖히고 → 팔 당기기';
+  beep(s.kind === 'work' ? 1000 : 600, 300);
+  if (controlChar) setLevel(lv);
+}
+
+$('btnEasier').onclick = () => { run.adjust--; reapply(); };
+$('btnHarder').onclick = () => { run.adjust++; reapply(); };
+function reapply() { const i = run.idx; run.idx = -1; enterSeg(i); }
+
+$('btnPause').onclick = () => {
+  if (!run.paused) { run.elapsed = curElapsed(); run.paused = true; $('btnPause').textContent = '계속하기'; if (controlChar) setLevel(1); }
+  else { run.startedAt = performance.now(); run.paused = false; $('btnPause').textContent = '일시정지'; reapply(); }
+};
+$('btnStop').onclick = () => { if (confirm('운동을 끝낼까요?')) finish(false); };
+
+function finish(complete) {
+  clearInterval(timer);
+  const e = Math.min(curElapsed(), run.total);
+  if (controlChar) setLevel(1);
+  try { wakeLock && wakeLock.release(); } catch (x) {}
+  beep(880, 200); setTimeout(() => beep(1320, 400), 250);
+
+  const dist = (live.dist != null && run.dist0 != null) ? live.dist - run.dist0 : null;
+  const strokes = (live.strokes != null && run.strokes0 != null) ? live.strokes - run.strokes0 : null;
+  $('sTime').textContent = mmss(e);
+  $('sDist').textContent = dist ?? '-';
+  $('sStrokes').textContent = strokes ?? '-';
+
+  const last = loadLast(run.prog.id);
+  let html = '<tr><th>회차</th><th>이번(m)</th><th>지난번(m)</th></tr>';
+  run.rounds.forEach((m, i) => {
+    const b = last && last.rounds ? last.rounds[i] : null;
+    html += `<tr><td>${i + 1}</td><td>${m}${b != null && m > b ? ' 👍' : ''}</td><td>${b ?? '-'}</td></tr>`;
+  });
+  $('sTable').innerHTML = run.rounds.length ? html : '<tr><td>기기 거리 데이터가 없어요</td></tr>';
+  $('sNote').textContent = complete
+    ? '다음 목표: 지난번보다 각 회차 거리를 조금씩 늘려 보세요. 쉽게 느껴지면 컨디션을 "조금 세게"로, 그다음 한 단계 긴 프로그램으로 올리세요.'
+    : '중간에 멈췄어요. 괜찮아요, 다음엔 "가볍게"로 끝까지 해 보세요.';
+
+  // 레이스 결과
+  if (run.ghost && dist != null) {
+    const g = Math.round(dist - ghostDist(e));
+    $('sNote').textContent = (g > 0 ? `🏆 과거의 나를 ${g}m 차이로 이겼어요! ` :
+                              g < 0 ? `과거의 나보다 ${-g}m 뒤졌어요. 다음엔 따라잡아 봐요. ` : '과거의 나와 동점! ')
+                             + $('sNote').textContent;
+  }
+
+  if (complete && dist != null) {
+    const d = new Date();
+    const rec = { date:`${d.getMonth() + 1}/${d.getDate()}`, dist, rounds:run.rounds, trace:run.trace };
+    saveRec('Last', run.prog.id, rec);
+    const best = loadRec('Best', run.prog.id);
+    if (!best || dist > best.dist) {
+      saveRec('Best', run.prog.id, rec);
+      if (best) $('sNote').textContent = `🥇 이 프로그램 최고 기록 경신! (이전 ${best.dist}m) ` + $('sNote').textContent;
+    }
+  }
+  show('done');
+}
+
+$('btnHome').onclick = () => location.reload();
+function show(id) { ['home', 'work', 'done'].forEach(x => $(x).classList.toggle('hidden', x !== id)); window.scrollTo(0, 0); }
+</script>
+</body>
+</html>

@@ -108,8 +108,8 @@
       </select>
       <div class="label" style="margin-top:10px">명령 전송 방식</div>
       <select id="mode">
-        <option value="u8">A: 표준 방식 (1바이트)</option>
-        <option value="s16">B: 2바이트 방식</option>
+        <option value="s16" selected>B: 2바이트 방식 (멜킨 확인됨)</option>
+        <option value="u8">A: 1바이트 방식</option>
       </select>
       <div style="margin-top:10px" class="seg3">
         <button class="ghost" data-test="2">강도 2 테스트</button>
@@ -240,6 +240,12 @@ document.querySelectorAll('#feel button').forEach(b => b.onclick = () => {
 });
 
 $('ghostSel').onchange = updateGhostInfo;
+
+// 기기 설정(변환·전송 방식)을 이 폰에 기억해 두기
+['scale', 'mode'].forEach(id => {
+  try { const v = localStorage.getItem('rowSet_' + id); if (v) $(id).value = v; } catch (e) {}
+  $(id).addEventListener('change', () => { try { localStorage.setItem('rowSet_' + id, $(id).value); } catch (e) {} });
+});
 updateGhostInfo();
 
 for (let a = 30; a <= 70; a++) {

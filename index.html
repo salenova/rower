@@ -138,7 +138,7 @@
   </div>
 
   <div class="row3">
-    <div class="card"><div class="label">목표 강도</div><div class="val big" id="tLevel">-</div></div>
+    <div class="card"><div class="label">목표 강도</div><div class="val big" id="tLevel">-</div><div class="label" id="devLv"></div></div>
     <div class="card"><div class="label">목표 페이스/500m</div><div class="val" id="tPace" style="font-size:24px">-</div></div>
     <div class="card"><div class="label">라운드</div><div class="val big" id="round">-</div></div>
   </div>
@@ -175,6 +175,10 @@
   <h2>운동 구간별 거리 (1회 = 운동 구간 1번)</h2>
   <div class="card"><table id="sTable"></table></div>
   <div class="note" id="sNote"></div>
+  <details style="margin-top:12px">
+    <summary>통신 기록 (강도가 이상할 때 캡처해서 보내 주세요)</summary>
+    <div id="sLog" style="background:#0a1016;color:#9fb3c5;font:11px ui-monospace,monospace;padding:10px;border-radius:10px;max-height:320px;overflow:auto;white-space:pre-wrap;margin-top:8px"></div>
+  </details>
   <div style="margin-top:16px"><button id="btnHome">처음으로</button></div>
 </section>
 
@@ -298,7 +302,7 @@ function lastText(id) {
    ========================================================= */
 // 표준 번호를 전체 문자열 형식으로 (일부 브라우저는 짧은 숫자를 못 알아들음)
 const U = n => `0000${n.toString(16).padStart(4, '0')}-0000-1000-8000-00805f9b34fb`;
-const FTMS = U(0x1826), ROWER_DATA = U(0x2ad1), CONTROL_PT = U(0x2ad9), RES_RANGE = U(0x2ad6);
+const FTMS = U(0x1826), ROWER_DATA = U(0x2ad1), CONTROL_PT = U(0x2ad9), RES_RANGE = U(0x2ad6), MACHINE_STATUS = U(0x2ada);
 let device, controlChar, range = null, queue = Promise.resolve(), lastLevelCmd = null;
 const live = {};   // 기기에서 받은 최신 값
 
@@ -359,6 +363,13 @@ async function connect(all) {
       log(`  기기 강도 범위(원시값): ${range.min}~${range.max} [${hex(v)}]`);
     }
 
+    // (진단용) 기기 상태 알림: 기기가 강도를 바꾸거나 멈추면 알려줌. 없어도 동작에는 문제 없음
+    const st = await step('6-1. 기기 상태 알림 찾기', () => svc.getCharacteristic(MACHINE_STATUS), true);
+    if (st) {
+      st.addEventListener('characteristicvaluechanged', e => onStatus(e.target.value));
+      await step('6-2. 기기 상태 알림 시작', () => st.startNotifications(), true);
+    }
+
     controlChar = await step('7. 제어 통로 찾기', () => svc.getCharacteristic(CONTROL_PT), true);
     if (controlChar) {
       controlChar.addEventListener('characteristicvaluechanged', e => onReply(e.target.value));
@@ -401,15 +412,33 @@ function onReply(v) {
   if (res === 5 && op !== 0x00) { sendCmd([0x00], '제어권 재요청'); if (lastLevelCmd) setLevel(lastLevelCmd); }
 }
 
+// 기기 상태 알림 해석 (FTMS Fitness Machine Status)
+const STATUS = { 1:'초기화', 2:'정지/일시정지', 3:'안전키 정지', 4:'시작/재개', 7:'목표 강도 변경', 0xff:'제어권 해제' };
+function onStatus(v) {
+  const op = v.getUint8(0);
+  let extra = '';
+  if (op === 7 && v.byteLength >= 2) extra = ` → 원시값 ${v.getInt8(1)}`;
+  log(`◇ 기기 상태: ${STATUS[op] || 'op ' + op}${extra} [${hex(v)}]${runTag()}`);
+}
+
 // 1~16 단계를 기기가 원하는 숫자로 바꿔 전송
+// 기기 원시값 → 1~16 단계 (보낼 때와 같은 규칙으로 되돌림)
+function useX10() { const s = $('scale').value; return s === 'x10' || (s === 'auto' && range && range.max >= 40); }
+function devLevel(raw) { return useX10() ? Math.round(raw / 10 * 10) / 10 : raw; }
+// 로그에 "운동 몇 분 몇 초, 어느 구간"인지 붙이기
+function runTag() {
+  if (!run || run.idx < 0) return '';
+  const s = run.segs[run.idx];
+  return ` · 운동 ${mmss(curElapsed())} ${KIND[s.kind]}`;
+}
 function setLevel(level) {
   lastLevelCmd = level;
   const s = $('scale').value;
-  const x10 = s === 'x10' || (s === 'auto' && range && range.max >= 40);
+  const x10 = useX10();
   let raw = x10 ? level * 10 : level;
   if (range) raw = Math.max(range.min, Math.min(range.max, raw));
   const bytes = $('mode').value === 's16' ? [0x04, raw & 0xff, (raw >> 8) & 0xff] : [0x04, raw & 0xff];
-  return sendCmd(bytes, `강도 ${level}단계`);
+  return sendCmd(bytes, `강도 ${level}단계${runTag()}`);
 }
 document.querySelectorAll('[data-test]').forEach(b => b.onclick = () => setLevel(parseInt(b.dataset.test, 10)));
 
@@ -422,6 +451,11 @@ function parseRower(dv) {
     if (f & 0x0008) { live.pace = dv.getUint16(i, true); i += 2; }
     if (f & 0x0010) i += 2;
     if (f & 0x0020) { live.power = dv.getInt16(i, true); i += 2; }
+    if (f & 0x0040) i += 2;
+    if (f & 0x0080) {                       // 기기가 알려주는 "지금 실제 강도"
+      const r = dv.getInt16(i, true); i += 2;
+      if (r !== live.res) { live.res = r; log(`◆ 기기 실제 강도: ${r} (${devLevel(r)}단계)${runTag()}`); }
+    }
   } catch (e) { /* 짧은 패킷은 무시 */ }
 }
 
@@ -517,6 +551,7 @@ function tick() {
   $('spm').textContent = live.spm ?? '-';
   $('pace').textContent = live.pace ? mmss(live.pace) : '-';
   showPaceHint(run.segs[idx].kind);
+  $('devLv').textContent = live.res != null ? `기기: ${devLevel(live.res)}` : '';
   $('power').textContent = live.power ?? '-';
   $('dist').textContent = myDist() ?? '-';
 
@@ -620,6 +655,8 @@ function finish(complete) {
       if (best) $('sNote').textContent = `🥇 이 프로그램 최고 기록 경신! (이전 ${best.dist}m) ` + $('sNote').textContent;
     }
   }
+  const copyLog = () => { $('sLog').textContent = $('log').textContent; };
+  copyLog(); queue.then(copyLog);   // 마지막 '강도 1' 전송까지 담기
   show('done');
 }
 

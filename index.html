@@ -110,6 +110,7 @@
       <select id="mode">
         <option value="s16" selected>B: 2바이트 방식 (멜킨 확인됨)</option>
         <option value="u8">A: 1바이트 방식</option>
+        <option value="reset16">C: 리셋 후 2바이트 (실험 · 강도가 누적될 때)</option>
       </select>
       <div style="margin-top:10px" class="seg3">
         <button class="ghost" data-test="2">강도 2 테스트</button>
@@ -390,9 +391,10 @@ async function connect(all) {
 $('btnConnect').onclick = () => connect(false);
 $('btnConnectAll').onclick = () => connect(true);
 
-function sendCmd(bytes, label) {
+function sendCmd(bytes, label, delayMs = 0) {
   queue = queue.then(async () => {
     if (!controlChar) return;
+    if (delayMs) await wait(delayMs);
     log(`→ ${label} [${bytes.map(b => b.toString(16).padStart(2, '0')).join(' ')}]`);
     const data = new Uint8Array(bytes);
     try {
@@ -437,18 +439,24 @@ function setLevel(level) {
   const x10 = useX10();
   let raw = x10 ? level * 10 : level;
   if (range) raw = Math.max(range.min, Math.min(range.max, raw));
-  const bytes = $('mode').value === 's16' ? [0x04, raw & 0xff, (raw >> 8) & 0xff] : [0x04, raw & 0xff];
-  return sendCmd(bytes, `강도 ${level}단계${runTag()}`);
+  const mode = $('mode').value;
+  const bytes = mode === 'u8' ? [0x04, raw & 0xff] : [0x04, raw & 0xff, (raw >> 8) & 0xff];
+  if (mode === 'reset16') {
+    // 실험: 기기가 강도를 '더하기'로 처리하는 것 같을 때, 매번 기기를 초기화한 뒤 새 강도를 보냄
+    sendCmd([0x01], '기기 리셋');
+    sendCmd([0x00], '제어권 요청', 300);
+  }
+  return sendCmd(bytes, `강도 ${level}단계${runTag()}`, mode === 'reset16' ? 300 : 0);
 }
 document.querySelectorAll('[data-test]').forEach(b => b.onclick = () => setLevel(parseInt(b.dataset.test, 10)));
 
 function parseRower(dv) {
   try {
     const f = dv.getUint16(0, true); let i = 2;
-    if (!(f & 0x0001)) { live.spm = dv.getUint8(i) / 2; live.strokes = dv.getUint16(i + 1, true); i += 3; }
+    if (!(f & 0x0001)) { live.spm = dv.getUint8(i) / 2; live.strokes = keepCounting('strokes', dv.getUint16(i + 1, true)); i += 3; }
     if (f & 0x0002) i += 1;
-    if (f & 0x0004) { live.dist = dv.getUint16(i, true) | (dv.getUint8(i + 2) << 16); i += 3; }
-    if (f & 0x0008) { live.pace = dv.getUint16(i, true); i += 2; }
+    if (f & 0x0004) { live.dist = keepCounting('dist', dv.getUint16(i, true) | (dv.getUint8(i + 2) << 16)); i += 3; onDist(); }
+    if (f & 0x0008) { live.devPace = dv.getUint16(i, true); i += 2; }
     if (f & 0x0010) i += 2;
     if (f & 0x0020) { live.power = dv.getInt16(i, true); i += 2; }
     if (f & 0x0040) i += 2;
@@ -457,6 +465,32 @@ function parseRower(dv) {
       if (r !== live.res) { live.res = r; log(`◆ 기기 실제 강도: ${r} (${devLevel(r)}단계)${runTag()}`); }
     }
   } catch (e) { /* 짧은 패킷은 무시 */ }
+  live.pace = live.calcPace ?? live.devPace;   // 거리로 계산한 페이스 우선, 없으면 기기 값
+  // (진단) 15초마다 기기 원본 데이터와 두 페이스를 기록
+  const now = performance.now();
+  if (now - lastRawLog > 15000) {
+    lastRawLog = now;
+    log(`📊 페이스 앱계산 ${live.calcPace ? mmss(live.calcPace) : '-'} / 기기신호 ${live.devPace ? mmss(live.devPace) : '-'}, 거리 ${live.dist ?? '-'}m [${hex(dv)}]${runTag()}`);
+  }
+}
+let lastRawLog = 0;
+// 기기 숫자가 갑자기 작아지면(기기 리셋) 그 전까지 값을 더해서 계속 이어 셈
+const counter = {};
+function keepCounting(key, raw) {
+  const c = counter[key] || (counter[key] = { last:raw, offset:0 });
+  if (raw < c.last) c.offset += c.last;
+  c.last = raw;
+  return raw + c.offset;
+}
+// 최근 10초 동안 간 거리로 500m 페이스 계산 (기기 페이스 값이 계기판과 다를 때가 있어서)
+const distHist = [];
+function onDist() {
+  const now = performance.now();
+  distHist.push([now, live.dist]);
+  while (distHist.length > 2 && now - distHist[1][0] >= 10000) distHist.shift();
+  const [t0, d0] = distHist[0], dt = (now - t0) / 1000, dd = live.dist - d0;
+  if (dt < 4) return;                                  // 아직 자료가 짧음
+  live.calcPace = dd > 0 ? Math.round(500 * dt / dd) : 0;   // 0 = 안 움직임 → 화면에 "-"
 }
 
 /* =========================================================

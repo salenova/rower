@@ -90,7 +90,11 @@
   <h2>나이 (심박 참고용)</h2>
   <select id="age"></select>
 
-  <div style="margin-top:20px"><button id="btnStart">운동 시작</button></div>
+  <label style="display:flex;gap:8px;align-items:center;margin-top:16px;font-size:15px">
+    <input type="checkbox" id="calib" checked style="width:22px;height:22px">
+    시작 전 강도 위치 맞추기 (16까지 올렸다 내림 · 약 20초)
+  </label>
+  <div style="margin-top:12px"><button id="btnStart">운동 시작</button></div>
 
   <div class="note">
     ⚠️ 가슴 통증, 어지러움, 말을 못 할 만큼 숨이 차면 바로 멈추세요.<br>
@@ -129,6 +133,15 @@
 </section>
 
 <!-- ================= 2. 운동 화면 ================= -->
+<!-- ================= 1-1. 강도 위치 맞추기 화면 ================= -->
+<section id="calibView" class="hidden">
+  <div id="cPhase" style="font-size:26px;font-weight:800;text-align:center;padding:10px;border-radius:14px;background:var(--cool)">강도 위치 맞추는 중</div>
+  <div id="cClock" style="font-size:84px;font-weight:800;text-align:center;font-variant-numeric:tabular-nums;margin-top:8px">0:20</div>
+  <div id="cStep" style="text-align:center;font-size:20px;font-weight:700">-</div>
+  <div class="note" style="text-align:center;font-size:15px">노를 잡지 말고 잠시 기다려 주세요.<br>끝나면 삐 소리와 함께 워밍업이 시작돼요.</div>
+  <div style="margin-top:20px"><button class="ghost" id="btnSkipCalib">건너뛰고 바로 시작</button></div>
+</section>
+
 <section id="work" class="hidden">
   <div id="phase">워밍업</div>
   <div id="clock">0:00</div>
@@ -529,9 +542,40 @@ async function keepAwake() { try { wakeLock = await navigator.wakeLock.request('
 let run = null, timer = null;
 const mmss = s => { s = Math.max(0, Math.ceil(s)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 
-$('btnStart').onclick = () => {
+/* 강도 위치 맞추기
+   멜킨 기기는 강도 모터가 위치를 잘못 기억할 때가 있음(계기판 숫자는 맞는데 실제로 훨씬 무거움).
+   수동으로 16까지 올렸다 내리면 정상으로 돌아와서, 같은 동작을 앱이 대신 함. */
+const CALIB_STEPS = [ { lv:16, sec:8 }, { lv:10, sec:4 }, { lv:5, sec:4 }, { lv:1, sec:4 } ];
+let calibSkip = null;
+async function calibrate() {
+  show('calibView');
+  const total = CALIB_STEPS.reduce((a, s) => a + s.sec, 0);
+  let left = total, skipped = false;
+  const skipP = new Promise(r => { calibSkip = () => { skipped = true; r(); }; });
+  log('▶ 강도 위치 맞추기 시작');
+  for (const st of CALIB_STEPS) {
+    if (skipped) break;
+    $('cStep').textContent = `강도 ${st.lv}단계로 이동 중`;
+    setLevel(st.lv);
+    for (let i = 0; i < st.sec && !skipped; i++) {
+      $('cClock').textContent = mmss(left--);
+      await Promise.race([wait(1000), skipP]);
+    }
+  }
+  log(skipped ? '  강도 위치 맞추기 건너뜀' : '  ✔ 강도 위치 맞추기 끝');
+}
+$('btnSkipCalib').onclick = () => calibSkip && calibSkip();
+try { const v = localStorage.getItem('rowSet_calib'); if (v) $('calib').checked = v === '1'; } catch (e) {}
+$('calib').onchange = () => { try { localStorage.setItem('rowSet_calib', $('calib').checked ? '1' : '0'); } catch (e) {} };
+
+$('btnStart').onclick = async () => {
   if (!controlChar && !confirm('로잉머신이 연결되지 않았어요. 강도 자동 조절 없이 타이머만으로 시작할까요?')) return;
   beep(660, 50); keepAwake();
+  if (controlChar && $('calib').checked) { await calibrate(); await queue; }
+  startRun();
+};
+
+function startRun() {
   const segs = buildSegments(selProg, feel);
   let t = 0; segs.forEach(s => { s.start = t; t += s.sec; });
   const age = parseInt($('age').value, 10), max = 220 - age;
@@ -546,7 +590,7 @@ $('btnStart').onclick = () => {
   $('roundMsg').textContent = run.base.fromLast
     ? `목표 페이스: 지난번 운동 구간 평균(${mmss(run.base.sec)}/500m) 기준`
     : '목표 페이스는 대략값이에요. 한 번 끝까지 하면 내 기록에 맞춰 바뀌어요.';
-};
+}
 
 // 오늘 운동 시작 후 내가 간 거리
 function myDist() { return (live.dist != null && run.dist0 != null) ? live.dist - run.dist0 : null; }
@@ -710,7 +754,7 @@ function finish(complete) {
 }
 
 $('btnHome').onclick = () => location.reload();
-function show(id) { ['home', 'work', 'done'].forEach(x => $(x).classList.toggle('hidden', x !== id)); window.scrollTo(0, 0); }
+function show(id) { ['home', 'calibView', 'work', 'done'].forEach(x => $(x).classList.toggle('hidden', x !== id)); window.scrollTo(0, 0); }
 </script>
 </body>
 </html>

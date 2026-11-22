@@ -117,6 +117,12 @@
         <button class="ghost" data-test="8">강도 8 테스트</button>
         <button class="ghost" data-test="14">강도 14 테스트</button>
       </div>
+      <div class="label" style="margin-top:12px">숫자 그대로 보내기 (실험용 · 변환·제한 없이 기기에 전달)</div>
+      <div class="label" id="rangeInfo">기기 강도 범위: 연결 후 표시</div>
+      <div style="display:flex;gap:8px;margin-top:6px">
+        <input id="rawVal" type="number" inputmode="numeric" value="10" style="flex:1;font-size:18px;padding:10px;border-radius:10px;border:0">
+        <button class="ghost" id="btnRaw" style="flex:2">이 숫자 보내기</button>
+      </div>
       <div id="log"></div>
     </div>
   </details>
@@ -362,6 +368,7 @@ async function connect(all) {
     if (v) {
       range = { min:v.getInt16(0, true), max:v.getInt16(2, true) };
       log(`  기기 강도 범위(원시값): ${range.min}~${range.max} [${hex(v)}]`);
+      $('rangeInfo').textContent = `기기 강도 범위(원시값): ${range.min}~${range.max}`;
     }
 
     // (진단용) 기기 상태 알림: 기기가 강도를 바꾸거나 멈추면 알려줌. 없어도 동작에는 문제 없음
@@ -438,7 +445,8 @@ function setLevel(level) {
   const s = $('scale').value;
   const x10 = useX10();
   let raw = x10 ? level * 10 : level;
-  if (range) raw = Math.max(range.min, Math.min(range.max, raw));
+  if (!x10) raw = Math.max(1, Math.min(16, raw));                    // 그대로 보내기: 1~16
+  else if (range) raw = Math.max(range.min, Math.min(range.max, raw));
   const mode = $('mode').value;
   const bytes = mode === 'u8' ? [0x04, raw & 0xff] : [0x04, raw & 0xff, (raw >> 8) & 0xff];
   if (mode === 'reset16') {
@@ -448,6 +456,13 @@ function setLevel(level) {
   }
   return sendCmd(bytes, `강도 ${level}단계${runTag()}`, mode === 'reset16' ? 300 : 0);
 }
+// 실험: 입력한 숫자를 변환 없이 그대로 보냄 (2바이트)
+$('btnRaw').onclick = () => {
+  const raw = parseInt($('rawVal').value, 10);
+  if (isNaN(raw)) return;
+  if (!controlChar) { alert('먼저 로잉머신을 연결해 주세요.'); return; }
+  sendCmd([0x04, raw & 0xff, (raw >> 8) & 0xff], `숫자 그대로 ${raw}`);
+};
 document.querySelectorAll('[data-test]').forEach(b => b.onclick = () => setLevel(parseInt(b.dataset.test, 10)));
 
 function parseRower(dv) {

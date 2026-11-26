@@ -69,6 +69,14 @@
   <button id="btnConnect">로잉머신 연결</button>
   <button id="btnConnectAll" class="ghost hidden" style="margin-top:8px">전체 기기 목록에서 찾기 (RRM01 선택)</button>
 
+  <button id="btnFloor" class="ghost" style="margin-top:8px">강도 바닥까지 내리기 (1분 · 실험)</button>
+
+  <div style="margin-top:16px"><button id="btnStart">운동 시작</button></div>
+  <label style="display:flex;gap:8px;align-items:center;margin-top:10px;font-size:15px">
+    <input type="checkbox" id="calib" checked style="width:22px;height:22px">
+    시작 전 강도 위치 맞추기 (16까지 올렸다 내림 · 약 20초)
+  </label>
+
   <h2>프로그램 선택</h2>
   <div class="prog" id="progList"></div>
 
@@ -90,11 +98,6 @@
   <h2>나이 (심박 참고용)</h2>
   <select id="age"></select>
 
-  <label style="display:flex;gap:8px;align-items:center;margin-top:16px;font-size:15px">
-    <input type="checkbox" id="calib" checked style="width:22px;height:22px">
-    시작 전 강도 위치 맞추기 (16까지 올렸다 내림 · 약 20초)
-  </label>
-  <div style="margin-top:12px"><button id="btnStart">운동 시작</button></div>
 
   <div class="note">
     ⚠️ 가슴 통증, 어지러움, 말을 못 할 만큼 숨이 차면 바로 멈추세요.<br>
@@ -138,7 +141,7 @@
   <div id="cPhase" style="font-size:26px;font-weight:800;text-align:center;padding:10px;border-radius:14px;background:var(--cool)">강도 위치 맞추는 중</div>
   <div id="cClock" style="font-size:84px;font-weight:800;text-align:center;font-variant-numeric:tabular-nums;margin-top:8px">0:20</div>
   <div id="cStep" style="text-align:center;font-size:20px;font-weight:700">-</div>
-  <div class="note" style="text-align:center;font-size:15px">노를 잡지 말고 잠시 기다려 주세요.<br>끝나면 삐 소리와 함께 워밍업이 시작돼요.</div>
+  <div class="note" id="cNote" style="text-align:center;font-size:15px">노를 잡지 말고 잠시 기다려 주세요.<br>끝나면 삐 소리와 함께 워밍업이 시작돼요.</div>
   <div style="margin-top:20px"><button class="ghost" id="btnSkipCalib">건너뛰고 바로 시작</button></div>
 </section>
 
@@ -425,11 +428,13 @@ function sendCmd(bytes, label, delayMs = 0) {
   return queue;
 }
 
+let lastReply = null;
 const RESULT = { 1:'성공', 2:'지원 안 함', 3:'잘못된 값', 4:'실패', 5:'제어권 없음' };
 function onReply(v) {
   if (v.getUint8(0) !== 0x80) { log('← ' + hex(v)); return; }
   const op = v.getUint8(1), res = v.getUint8(2);
   log(`← 응답(op ${op}): ${RESULT[res] || res}`);
+  lastReply = { op, res };
   // 제어권을 잃었으면 다시 요청하고 마지막 강도 재전송
   if (res === 5 && op !== 0x00) { sendCmd([0x00], '제어권 재요청'); if (lastLevelCmd) setLevel(lastLevelCmd); }
 }
@@ -547,8 +552,13 @@ const mmss = s => { s = Math.max(0, Math.ceil(s)); return `${Math.floor(s / 60)}
    수동으로 16까지 올렸다 내리면 정상으로 돌아와서, 같은 동작을 앱이 대신 함. */
 const CALIB_STEPS = [ { lv:16, sec:8 }, { lv:10, sec:4 }, { lv:5, sec:4 }, { lv:1, sec:4 } ];
 let calibSkip = null;
-async function calibrate() {
+function setToolView(title, btn, note) {
+  $('cPhase').textContent = title; $('btnSkipCalib').textContent = btn; $('cNote').innerHTML = note;
   show('calibView');
+}
+async function calibrate() {
+  setToolView('강도 위치 맞추는 중', '건너뛰고 바로 시작',
+    '노를 잡지 말고 잠시 기다려 주세요.<br>끝나면 삐 소리와 함께 워밍업이 시작돼요.');
   const total = CALIB_STEPS.reduce((a, s) => a + s.sec, 0);
   let left = total, skipped = false;
   const skipP = new Promise(r => { calibSkip = () => { skipped = true; r(); }; });
@@ -565,6 +575,48 @@ async function calibrate() {
   log(skipped ? '  강도 위치 맞추기 건너뜀' : '  ✔ 강도 위치 맞추기 끝');
 }
 $('btnSkipCalib').onclick = () => calibSkip && calibSkip();
+
+/* 강도 바닥까지 내리기 (실험)
+   레벨 1인데도 무거울 때, 1분 동안 3초마다 '1단계보다 더 낮은 값'을 보내 모터를 끝까지 내려 봄.
+   기기가 낮은 값을 거부하면(잘못된 값) 더 내리지 않고 마지막으로 받아들인 값을 유지.
+   ※ 끝나면 기기가 기억하는 숫자가 이상할 수 있음 → 운동 시작 시 '위치 맞추기'(16→1)로 다시 맞춤 */
+async function floorDown() {
+  setToolView('강도 바닥까지 내리는 중', '중지',
+    '노를 잡지 말고 기다려 주세요.<br>끝나면 가볍게 저어서 무게를 확인해 보세요.');
+  const SEC = 60, EVERY = 3;
+  let stopped = false, raw = 10, lowestOk = null, refused = false;
+  const stopP = new Promise(r => { calibSkip = () => { stopped = true; r(); }; });
+  log('▶ 강도 바닥까지 내리기 시작');
+  for (let t = 0; t < SEC && !stopped; t += EVERY) {
+    const v = refused ? lowestOk : raw;
+    lastReply = null;
+    sendCmd([0x04, v & 0xff, (v >> 8) & 0xff], `바닥 내리기: 원시값 ${v}`);
+    $('cStep').textContent = `보낸 값: ${v}` + (refused ? ' (기기가 더 낮은 값은 거부)' : '');
+    for (let i = 0; i < EVERY && !stopped; i++) {
+      $('cClock').textContent = mmss(SEC - t - i);
+      await Promise.race([wait(1000), stopP]);
+    }
+    if (!refused) {
+      if (lastReply && lastReply.op === 4 && lastReply.res !== 1) {
+        refused = true;
+        log(`  기기가 원시값 ${v}을(를) 거부 → 최저값 ${lowestOk ?? '없음'}에서 멈춤`);
+        if (lowestOk == null) lowestOk = 10;
+      } else { lowestOk = v; raw -= 10; }
+    }
+  }
+  log(stopped ? '  바닥 내리기 중지됨' : `  ✔ 바닥 내리기 끝 (마지막으로 받아들인 값 ${lowestOk})`);
+  beep(880, 200);
+  $('cPhase').textContent = '끝났어요';
+  $('cStep').textContent = `마지막으로 받아들인 값: ${lowestOk ?? '-'}`;
+  $('cNote').innerHTML = '가볍게 저어서 무게를 확인해 보세요.<br>계기판 숫자가 이상하면 운동 시작 때 "위치 맞추기"가 다시 맞춰 줘요.';
+  $('btnSkipCalib').textContent = '처음 화면으로';
+  calibSkip = () => show('home');
+}
+$('btnFloor').onclick = () => {
+  if (!controlChar) { alert('먼저 로잉머신을 연결해 주세요.'); return; }
+  if (!confirm('1분 동안 3초마다 강도를 1단계보다 더 낮게 내리는 신호를 보내요.\n노를 잡지 말고 기다려 주세요. 시작할까요?')) return;
+  floorDown();
+};
 try { const v = localStorage.getItem('rowSet_calib'); if (v) $('calib').checked = v === '1'; } catch (e) {}
 $('calib').onchange = () => { try { localStorage.setItem('rowSet_calib', $('calib').checked ? '1' : '0'); } catch (e) {} };
 

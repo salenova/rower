@@ -69,8 +69,6 @@
   <button id="btnConnect">로잉머신 연결</button>
   <button id="btnConnectAll" class="ghost hidden" style="margin-top:8px">전체 기기 목록에서 찾기 (RRM01 선택)</button>
 
-  <button id="btnFloor" class="ghost" style="margin-top:8px">강도 바닥까지 내리기 (1분 · 실험)</button>
-
   <div style="margin-top:16px"><button id="btnStart">운동 시작</button></div>
   <label style="display:flex;gap:8px;align-items:center;margin-top:10px;font-size:15px">
     <input type="checkbox" id="calib" checked style="width:22px;height:22px">
@@ -327,6 +325,8 @@ function lastText(id) {
 const U = n => `0000${n.toString(16).padStart(4, '0')}-0000-1000-8000-00805f9b34fb`;
 const FTMS = U(0x1826), ROWER_DATA = U(0x2ad1), CONTROL_PT = U(0x2ad9), RES_RANGE = U(0x2ad6), MACHINE_STATUS = U(0x2ada);
 let device, controlChar, range = null, queue = Promise.resolve(), lastLevelCmd = null;
+// 마지막으로 보낸 강도 명령. 멜킨은 '이미 그 단계인데 같은 값을 또 받으면' 갑자기 무거워지는 증상이 있어 같은 값은 다시 보내지 않음
+let lastLevelKey = null;
 const live = {};   // 기기에서 받은 최신 값
 
 const log = m => { $('log').textContent += `[${new Date().toLocaleTimeString()}] ${m}\n`; $('log').scrollTop = 1e9; };
@@ -362,7 +362,8 @@ async function connect(all) {
     device = await step(all ? '1. 기기 선택 (전체 기기)' : '1. 기기 선택', () => navigator.bluetooth.requestDevice(
       all ? { acceptAllDevices:true, optionalServices:[FTMS] }
           : { filters:[{ services:[FTMS] }], optionalServices:[FTMS] }));
-    device.addEventListener('gattserverdisconnected', () => setStatus('⚠️ 연결이 끊어졌어요. 다시 연결해 주세요.'));
+    lastLevelKey = null;
+    device.addEventListener('gattserverdisconnected', () => { lastLevelKey = null; setStatus('⚠️ 연결이 끊어졌어요. 다시 연결해 주세요.'); });
     setStatus(`연결 중... (${device.name || '기기'})`);
 
     // 연결은 실패가 잦아서 최대 3번 시도
@@ -428,15 +429,13 @@ function sendCmd(bytes, label, delayMs = 0) {
   return queue;
 }
 
-let lastReply = null;
 const RESULT = { 1:'성공', 2:'지원 안 함', 3:'잘못된 값', 4:'실패', 5:'제어권 없음' };
 function onReply(v) {
   if (v.getUint8(0) !== 0x80) { log('← ' + hex(v)); return; }
   const op = v.getUint8(1), res = v.getUint8(2);
   log(`← 응답(op ${op}): ${RESULT[res] || res}`);
-  lastReply = { op, res };
   // 제어권을 잃었으면 다시 요청하고 마지막 강도 재전송
-  if (res === 5 && op !== 0x00) { sendCmd([0x00], '제어권 재요청'); if (lastLevelCmd) setLevel(lastLevelCmd); }
+  if (res === 5 && op !== 0x00) { sendCmd([0x00], '제어권 재요청'); if (lastLevelCmd) setLevel(lastLevelCmd, true); }
 }
 
 // 기기 상태 알림 해석 (FTMS Fitness Machine Status)
@@ -458,7 +457,7 @@ function runTag() {
   const s = run.segs[run.idx];
   return ` · 운동 ${mmss(curElapsed())} ${KIND[s.kind]}`;
 }
-function setLevel(level) {
+function setLevel(level, force = false) {
   lastLevelCmd = level;
   const s = $('scale').value;
   const x10 = useX10();
@@ -467,6 +466,12 @@ function setLevel(level) {
   else if (range) raw = Math.max(range.min, Math.min(range.max, raw));
   const mode = $('mode').value;
   const bytes = mode === 'u8' ? [0x04, raw & 0xff] : [0x04, raw & 0xff, (raw >> 8) & 0xff];
+  const key = bytes.join(',');
+  if (!force && mode !== 'reset16' && key === lastLevelKey) {
+    log(`= 강도 ${level}단계는 이미 보낸 값이라 다시 보내지 않음${runTag()}`);
+    return queue;
+  }
+  lastLevelKey = key;
   if (mode === 'reset16') {
     // 실험: 기기가 강도를 '더하기'로 처리하는 것 같을 때, 매번 기기를 초기화한 뒤 새 강도를 보냄
     sendCmd([0x01], '기기 리셋');
@@ -479,7 +484,10 @@ $('btnRaw').onclick = () => {
   const raw = parseInt($('rawVal').value, 10);
   if (isNaN(raw)) return;
   if (!controlChar) { alert('먼저 로잉머신을 연결해 주세요.'); return; }
-  sendCmd([0x04, raw & 0xff, (raw >> 8) & 0xff], `숫자 그대로 ${raw}`);
+  const bytes = [0x04, raw & 0xff, (raw >> 8) & 0xff];
+  if (bytes.join(',') === lastLevelKey) { log(`= 숫자 ${raw}은(는) 이미 보낸 값이라 다시 보내지 않음`); return; }
+  lastLevelKey = bytes.join(',');
+  sendCmd(bytes, `숫자 그대로 ${raw}`);
 };
 document.querySelectorAll('[data-test]').forEach(b => b.onclick = () => setLevel(parseInt(b.dataset.test, 10)));
 
@@ -576,47 +584,6 @@ async function calibrate() {
 }
 $('btnSkipCalib').onclick = () => calibSkip && calibSkip();
 
-/* 강도 바닥까지 내리기 (실험)
-   레벨 1인데도 무거울 때, 1분 동안 3초마다 '1단계보다 더 낮은 값'을 보내 모터를 끝까지 내려 봄.
-   기기가 낮은 값을 거부하면(잘못된 값) 더 내리지 않고 마지막으로 받아들인 값을 유지.
-   ※ 끝나면 기기가 기억하는 숫자가 이상할 수 있음 → 운동 시작 시 '위치 맞추기'(16→1)로 다시 맞춤 */
-async function floorDown() {
-  setToolView('강도 바닥까지 내리는 중', '중지',
-    '노를 잡지 말고 기다려 주세요.<br>끝나면 가볍게 저어서 무게를 확인해 보세요.');
-  const SEC = 60, EVERY = 3;
-  let stopped = false, raw = 10, lowestOk = null, refused = false;
-  const stopP = new Promise(r => { calibSkip = () => { stopped = true; r(); }; });
-  log('▶ 강도 바닥까지 내리기 시작');
-  for (let t = 0; t < SEC && !stopped; t += EVERY) {
-    const v = refused ? lowestOk : raw;
-    lastReply = null;
-    sendCmd([0x04, v & 0xff, (v >> 8) & 0xff], `바닥 내리기: 원시값 ${v}`);
-    $('cStep').textContent = `보낸 값: ${v}` + (refused ? ' (기기가 더 낮은 값은 거부)' : '');
-    for (let i = 0; i < EVERY && !stopped; i++) {
-      $('cClock').textContent = mmss(SEC - t - i);
-      await Promise.race([wait(1000), stopP]);
-    }
-    if (!refused) {
-      if (lastReply && lastReply.op === 4 && lastReply.res !== 1) {
-        refused = true;
-        log(`  기기가 원시값 ${v}을(를) 거부 → 최저값 ${lowestOk ?? '없음'}에서 멈춤`);
-        if (lowestOk == null) lowestOk = 10;
-      } else { lowestOk = v; raw -= 10; }
-    }
-  }
-  log(stopped ? '  바닥 내리기 중지됨' : `  ✔ 바닥 내리기 끝 (마지막으로 받아들인 값 ${lowestOk})`);
-  beep(880, 200);
-  $('cPhase').textContent = '끝났어요';
-  $('cStep').textContent = `마지막으로 받아들인 값: ${lowestOk ?? '-'}`;
-  $('cNote').innerHTML = '가볍게 저어서 무게를 확인해 보세요.<br>계기판 숫자가 이상하면 운동 시작 때 "위치 맞추기"가 다시 맞춰 줘요.';
-  $('btnSkipCalib').textContent = '처음 화면으로';
-  calibSkip = () => show('home');
-}
-$('btnFloor').onclick = () => {
-  if (!controlChar) { alert('먼저 로잉머신을 연결해 주세요.'); return; }
-  if (!confirm('1분 동안 3초마다 강도를 1단계보다 더 낮게 내리는 신호를 보내요.\n노를 잡지 말고 기다려 주세요. 시작할까요?')) return;
-  floorDown();
-};
 try { const v = localStorage.getItem('rowSet_calib'); if (v) $('calib').checked = v === '1'; } catch (e) {}
 $('calib').onchange = () => { try { localStorage.setItem('rowSet_calib', $('calib').checked ? '1' : '0'); } catch (e) {} };
 
